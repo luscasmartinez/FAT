@@ -155,7 +155,7 @@ class Persistencia:
             )
             self.bucket = bucket
             self.prefix = configuracao["S3_PREFIX"].strip("/")
-            self.s3.head_bucket(Bucket=self.bucket)
+            self.s3.list_objects_v2(Bucket=self.bucket, MaxKeys=1)
         except ErroPersistencia:
             raise
         except ClientError as exc:
