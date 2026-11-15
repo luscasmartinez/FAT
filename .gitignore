@@ -1,0 +1,20 @@
+# Persisted uploads and generated validation reports
+storage/
+**/storage/
+*.tmp
+.*.tmp
+
+# Local credentials and environment files
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Python and Streamlit caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.streamlit/cache/
+storage/
+storage/
+dashboard/storage/
