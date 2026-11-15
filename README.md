@@ -45,16 +45,16 @@ Variáveis de ambiente:
 | `STORAGE_DIR` | `./storage` | Raiz local persistente |
 | `MAX_VERSOES` | `5` | Total de versões não arquivadas, incluindo a atual; as mais antigas são arquivadas, nunca apagadas |
 | `MAX_UPLOAD_MB` | `50` | Tamanho máximo por upload |
-| `S3_ENDPOINT` | vazio | Endpoint S3-compatível |
+| `S3_ENDPOINT` | vazio | Endpoint base S3-compatível (por exemplo, o endpoint da conta R2, sem bucket) |
 | `S3_BUCKET` | vazio | Bucket existente |
 | `S3_ACCESS_KEY` | vazio | Chave de acesso; não inclua no repositório |
 | `S3_SECRET_KEY` | vazio | Segredo; não inclua no repositório |
-| `S3_REGION` | vazio | Região exigida pelo serviço |
+| `S3_REGION` | `auto` | Região exigida pelo serviço |
 | `S3_PREFIX` | vazio | Prefixo opcional dentro do bucket |
 
 Para persistência local em Render, crie um Disk e defina `STORAGE_DIR` para o mount path desse volume (por exemplo, `/var/data/faturamento`). No Railway, anexe um Volume ao serviço e defina `STORAGE_DIR` para o mount path configurado (por exemplo, `/data/faturamento`). O diretório deve ser gravável pelo processo do app.
 
-Em Streamlit Community Cloud, o disco local pode ser efêmero e ser apagado em reinícios. Use `STORAGE_BACKEND=s3` com um bucket S3-compatível ou hospede a aplicação com volume persistente. Configure as credenciais por variáveis protegidas do serviço ou `st.secrets`; nunca as grave em arquivos versionados. O app exige as cinco variáveis S3 quando o backend `s3` é selecionado.
+Em Streamlit Community Cloud, o disco local pode ser efêmero e ser apagado em reinícios. Use `STORAGE_BACKEND=s3` com um bucket S3-compatível ou hospede a aplicação com volume persistente. Configure `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` e `S3_REGION` em `st.secrets` (o app também aceita essas configurações no ambiente); o endpoint pode conter o sufixo do bucket, que será removido antes de criar o cliente. O bucket é passado separadamente nas operações S3. Nunca grave credenciais em arquivos versionados.
 
 Para restaurar uma versão, abra **Histórico e ações** junto à base e use **Restaurar versão anterior**. Para remover a base ativa sem apagar versões, use **Remover base atual** e confirme na caixa de diálogo; bases ausentes deixam os indicadores dependentes indisponíveis, sem zerá-los. A retenção `MAX_VERSOES` move versões antigas para `historico/arquivadas/`.
 

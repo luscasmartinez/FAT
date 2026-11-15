@@ -126,7 +126,7 @@ class Persistencia:
         try:
             endpoint = urlsplit(configuracao["S3_ENDPOINT"])
             bucket = configuracao["S3_BUCKET"]
-            if not endpoint.scheme or not endpoint.netloc:
+            if endpoint.scheme != "https" or not endpoint.netloc:
                 raise ErroPersistencia("S3_ENDPOINT deve ser uma URL válida com https://.")
             caminho = endpoint.path.rstrip("/")
             if caminho:
@@ -145,7 +145,7 @@ class Persistencia:
                 aws_access_key_id=configuracao["S3_ACCESS_KEY"],
                 aws_secret_access_key=configuracao["S3_SECRET_KEY"],
                 region_name=configuracao["S3_REGION"] or "auto",
-                config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
+                config=Config(signature_version="s3v4"),
             )
             self.bucket = bucket
             self.prefix = configuracao["S3_PREFIX"].strip("/")
