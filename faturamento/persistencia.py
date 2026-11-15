@@ -139,13 +139,19 @@ class Persistencia:
                         "S3_ENDPOINT deve apontar ao endpoint base do serviço; não inclua um caminho que não seja o bucket configurado."
                     )
             endpoint_url = urlunsplit((endpoint.scheme, endpoint.netloc, caminho, "", ""))
+            config_boto = Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "path"},
+                request_checksum_calculation="when_required",
+                response_checksum_validation="when_required",
+            )
             self.s3 = boto3.client(
                 "s3",
                 endpoint_url=endpoint_url,
                 aws_access_key_id=configuracao["S3_ACCESS_KEY"],
                 aws_secret_access_key=configuracao["S3_SECRET_KEY"],
                 region_name=configuracao["S3_REGION"] or "auto",
-                config=Config(signature_version="s3v4"),
+                config=config_boto,
             )
             self.bucket = bucket
             self.prefix = configuracao["S3_PREFIX"].strip("/")
