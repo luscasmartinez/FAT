@@ -6,6 +6,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -14,9 +15,11 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Callable
+from urllib.parse import urlsplit, urlunsplit
 
 BASES = ("economias", "faturamento", "meta")
 EXTENSAO_BASE = {"economias": ".xlsx", "faturamento": ".xlsx", "meta": ".xlsx"}
+LOGGER = logging.getLogger(__name__)
 
 
 class ErroPersistencia(RuntimeError):
@@ -25,6 +28,30 @@ class ErroPersistencia(RuntimeError):
 
 class ErroValidacaoUpload(ValueError):
     """O arquivo enviado não passou pelo validador específico da base."""
+
+
+def _configuracao(nome: str, padrao: str | None = None) -> str | None:
+    """Prioriza Streamlit Secrets; usa ambiente como fallback no desenvolvimento local."""
+    try:
+        import streamlit as st
+
+        valor = st.secrets.get(nome)
+    except Exception:
+        valor = None
+    if valor is not None and str(valor).strip():
+        return str(valor).strip()
+    valor_ambiente = os.getenv(nome)
+    if valor_ambiente is not None and valor_ambiente.strip():
+        return valor_ambiente.strip()
+    return padrao
+
+
+def _inteiro_configurado(nome: str, padrao: int) -> int:
+    valor = _configuracao(nome, str(padrao))
+    try:
+        return max(1, int(valor))
+    except (TypeError, ValueError) as exc:
+        raise ErroPersistencia(f"{nome} deve ser um número inteiro positivo.") from exc
 
 
 def sha256(conteudo: bytes) -> str:
@@ -47,13 +74,13 @@ def nome_seguro(nome: str, tipo: str) -> str:
 
 class Persistencia:
     def __init__(self) -> None:
-        backend = os.getenv("STORAGE_BACKEND", "local").strip().lower() or "local"
+        backend = (_configuracao("STORAGE_BACKEND", "local") or "local").lower()
         if backend not in {"local", "s3"}:
             raise ErroPersistencia("STORAGE_BACKEND deve ser local ou s3.")
         self.backend = backend
-        self.max_versoes = max(1, int(os.getenv("MAX_VERSOES", "5")))
-        self.max_upload_bytes = max(1, int(os.getenv("MAX_UPLOAD_MB", "50"))) * 1024 * 1024
-        self.root = Path(os.getenv("STORAGE_DIR", "./storage")).expanduser().resolve()
+        self.max_versoes = _inteiro_configurado("MAX_VERSOES", 5)
+        self.max_upload_bytes = _inteiro_configurado("MAX_UPLOAD_MB", 50) * 1024 * 1024
+        self.root = Path(_configuracao("STORAGE_DIR", "./storage") or "./storage").expanduser().resolve()
         self.bucket = ""
         self.prefix = ""
         self.s3 = None
@@ -64,7 +91,7 @@ class Persistencia:
 
     @property
     def local_temporal(self) -> bool:
-        return self.backend == "local" and not os.getenv("STORAGE_DIR")
+        return self.backend == "local" and _configuracao("STORAGE_DIR") is None
 
     @property
     def localizacao(self) -> str:
@@ -74,27 +101,77 @@ class Persistencia:
         return f"s3://{self.bucket}{sufixo}"
 
     def _configurar_s3(self) -> None:
-        obrigatorias = ("S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY", "S3_REGION")
-        ausentes = [nome for nome in obrigatorias if not os.getenv(nome)]
+        configuracao = {
+            "S3_ENDPOINT": _configuracao("S3_ENDPOINT"),
+            "S3_BUCKET": _configuracao("S3_BUCKET"),
+            "S3_ACCESS_KEY": _configuracao("S3_ACCESS_KEY"),
+            "S3_SECRET_KEY": _configuracao("S3_SECRET_KEY"),
+            "S3_REGION": _configuracao("S3_REGION", "auto"),
+            "S3_PREFIX": _configuracao("S3_PREFIX", "") or "",
+        }
+        obrigatorias = ("S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY")
+        ausentes = [nome for nome in obrigatorias if not configuracao[nome]]
         if ausentes:
-            raise ErroPersistencia("STORAGE_BACKEND=s3 requer todas as variáveis S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY e S3_REGION.")
+            raise ErroPersistencia(
+                "STORAGE_BACKEND=s3 requer S3_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY e S3_SECRET_KEY em st.secrets ou no ambiente local."
+            )
         try:
             import boto3
+            from botocore.config import Config
+            from botocore.exceptions import ClientError
+        except ImportError as exc:
+            LOGGER.exception("Dependência boto3/botocore ausente para STORAGE_BACKEND=s3.")
+            raise ErroPersistencia("STORAGE_BACKEND=s3 requer as dependências boto3 e botocore.") from exc
 
+        try:
+            endpoint = urlsplit(configuracao["S3_ENDPOINT"])
+            bucket = configuracao["S3_BUCKET"]
+            if not endpoint.scheme or not endpoint.netloc:
+                raise ErroPersistencia("S3_ENDPOINT deve ser uma URL válida com https://.")
+            caminho = endpoint.path.rstrip("/")
+            if caminho:
+                partes_caminho = caminho.strip("/").split("/")
+                if partes_caminho[-1] == bucket:
+                    caminho = "/".join(partes_caminho[:-1])
+                    caminho = f"/{caminho}" if caminho else ""
+                else:
+                    raise ErroPersistencia(
+                        "S3_ENDPOINT deve apontar ao endpoint base do serviço; não inclua um caminho que não seja o bucket configurado."
+                    )
+            endpoint_url = urlunsplit((endpoint.scheme, endpoint.netloc, caminho, "", ""))
             self.s3 = boto3.client(
                 "s3",
-                endpoint_url=os.environ["S3_ENDPOINT"],
-                aws_access_key_id=os.environ["S3_ACCESS_KEY"],
-                aws_secret_access_key=os.environ["S3_SECRET_KEY"],
-                region_name=os.environ["S3_REGION"],
+                endpoint_url=endpoint_url,
+                aws_access_key_id=configuracao["S3_ACCESS_KEY"],
+                aws_secret_access_key=configuracao["S3_SECRET_KEY"],
+                region_name=configuracao["S3_REGION"] or "auto",
+                config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
             )
-            self.bucket = os.environ["S3_BUCKET"]
-            self.prefix = os.getenv("S3_PREFIX", "").strip("/")
+            self.bucket = bucket
+            self.prefix = configuracao["S3_PREFIX"].strip("/")
             self.s3.head_bucket(Bucket=self.bucket)
         except ErroPersistencia:
             raise
+        except ClientError as exc:
+            erro = exc.response.get("Error", {})
+            metadata = exc.response.get("ResponseMetadata", {})
+            codigo = str(erro.get("Code", "ClientError"))
+            mensagem = str(erro.get("Message", "sem detalhes do serviço"))
+            request_id = str(metadata.get("RequestId", "indisponível"))
+            LOGGER.error(
+                "Falha ClientError ao inicializar S3/R2: código=%s mensagem=%s request_id=%s",
+                codigo,
+                mensagem,
+                request_id,
+            )
+            raise ErroPersistencia(
+                f"Não foi possível inicializar o armazenamento S3: {codigo}: {mensagem} (request_id={request_id})."
+            ) from exc
         except Exception as exc:
-            raise ErroPersistencia(f"Não foi possível inicializar o armazenamento S3: {type(exc).__name__}.") from exc
+            LOGGER.exception("Falha ao inicializar cliente S3/R2 (%s).", type(exc).__name__)
+            raise ErroPersistencia(
+                f"Não foi possível inicializar o armazenamento S3: {type(exc).__name__}: {exc}"
+            ) from exc
 
     def _criar_diretorios(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
