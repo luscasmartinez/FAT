@@ -1,0 +1,7 @@
+pandas>=2.2
+streamlit>=1.40
+plotly>=5.22
+openpyxl>=3.1
+python-calamine>=0.2
+filelock>=3.13
+boto3>=1.35
