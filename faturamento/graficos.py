@@ -15,7 +15,7 @@ from faturamento.constantes import (
     ORDEM_CLASSIFICACAO,
     ROTULOS,
 )
-from faturamento.formato import brl, compacto, escala_eixo, percentual
+from faturamento.formato import brl, compacto, decimal, escala_eixo, percentual
 
 CONFIG = {
     "displaylogo": False,
@@ -106,6 +106,152 @@ def grafico_barras_classificacao(resumo: pd.DataFrame) -> go.Figure:
     fig.update_yaxes(title=titulo, showgrid=True, gridcolor="#E2E5F0", zerolinecolor="#D3D7E6")
     fig.update_xaxes(showgrid=False)
     return _base(fig, 420)
+
+
+def grafico_grupos_faturamento(tabela: pd.DataFrame, referencia: pd.Timestamp) -> go.Figure:
+    dados = tabela.loc[tabela["Indicador"].eq("Faturamento Total Líquido")].copy()
+    por_grupo = {}
+    for _, linha in dados.iterrows():
+        grupo = linha["Dimensão"]
+        rotulo = "N/A" if pd.isna(grupo) else str(int(grupo)) if _inteiro(grupo) else str(grupo)
+        por_grupo[rotulo] = linha
+
+    extras = sorted(
+        (rotulo for rotulo in por_grupo if rotulo not in {str(codigo) for codigo in range(1, 18)} | {"N/A"}),
+        key=lambda rotulo: (not _inteiro(rotulo), int(rotulo) if _inteiro(rotulo) else rotulo),
+    )
+    categorias = [str(codigo) for codigo in range(1, 18)] + extras + ["N/A"]
+    metas = [float(por_grupo[grupo]["Meta"]) if grupo in por_grupo and pd.notna(por_grupo[grupo]["Meta"]) else 0.0 for grupo in categorias]
+    realizados = [
+        float(por_grupo[grupo]["Realizado líquido"])
+        if grupo in por_grupo and pd.notna(por_grupo[grupo]["Realizado líquido"])
+        else 0.0
+        for grupo in categorias
+    ]
+    atingimentos = [
+        float(por_grupo[grupo]["Realizado líquido"]) / metas[indice]
+        if (
+            grupo in por_grupo
+            and metas[indice] != 0
+            and pd.notna(por_grupo[grupo]["Realizado líquido"])
+        )
+        else None
+        for indice, grupo in enumerate(categorias)
+    ]
+    rotulos_meta = [
+        decimal(metas[indice] / 1_000_000, 1) if grupo in por_grupo and pd.notna(por_grupo[grupo]["Meta"]) else ""
+        for indice, grupo in enumerate(categorias)
+    ]
+    rotulos_realizados = [
+        decimal(realizados[indice] / 1_000_000, 1)
+        if grupo in por_grupo and pd.notna(por_grupo[grupo]["Realizado líquido"])
+        else ""
+        for indice, grupo in enumerate(categorias)
+    ]
+    rotulos_atingimento = [f"{valor:.0%}" if valor is not None else "" for valor in atingimentos]
+
+    mes_anterior = referencia.replace(day=1) - pd.DateOffset(months=1)
+    meses = (
+        "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro",
+    )
+    subtitulo = (
+        f"Valor do mês por GF • {meses[mes_anterior.month - 1]}/{mes_anterior.year} "
+        "• R$ milhões • orçado RF2T26"
+    )
+
+    fig = _base(go.Figure(), 460)
+    fig.add_trace(
+        go.Bar(
+            x=categorias,
+            y=[valor / 1_000_000 for valor in metas],
+            name="Orçado RF2T26",
+            marker_color="#000080",
+            text=rotulos_meta,
+            textposition="outside",
+            textfont=dict(color="#000080", size=12),
+            cliponaxis=False,
+            hovertemplate="<b>GF %{x}</b><br>Orçado: R$ %{y:.1f} milhões<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Bar(
+            x=categorias,
+            y=[valor / 1_000_000 for valor in realizados],
+            name="Realizado",
+            marker_color="#17E3CB",
+            text=rotulos_realizados,
+            textposition="outside",
+            textfont=dict(color="#00AFC4", size=12),
+            cliponaxis=False,
+            hovertemplate="<b>GF %{x}</b><br>Realizado: R$ %{y:.1f} milhões<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=categorias,
+            y=atingimentos,
+            yaxis="y2",
+            name="% de atingimento",
+            mode="lines+markers+text",
+            line=dict(color="#FFA500", width=2),
+            marker=dict(symbol="circle", size=8, color="#FFFFFF", line=dict(color="#FFA500", width=2)),
+            text=rotulos_atingimento,
+            textposition="top center",
+            textfont=dict(color="#FFA500", size=12, family="Inter, Segoe UI, sans-serif"),
+            cliponaxis=False,
+            hovertemplate="<b>GF %{x}</b><br>Atingimento: %{y:.0%}<extra></extra>",
+        )
+    )
+
+    maximo = max([*metas, *realizados], default=0) / 1_000_000
+    minimo = min([*metas, *realizados], default=0) / 1_000_000
+    fig.update_layout(
+        title=dict(
+            text=(
+                "<b>Por grupo de faturamento</b><br>"
+                f"<span style='font-size:13px;color:#44495C;font-weight:400'>{subtitulo}</span>"
+            ),
+            x=0,
+            xanchor="left",
+            y=0.98,
+            yanchor="top",
+            font=dict(size=18, color="#000080"),
+        ),
+        barmode="group",
+        bargap=0.3,
+        bargroupgap=0.06,
+        margin=dict(l=12, r=12, t=82, b=78),
+        legend=dict(orientation="h", yanchor="top", y=-0.17, x=0, font=dict(size=12)),
+        hovermode="x unified",
+        yaxis=dict(
+            range=[min(0, minimo * 1.08), max(1, maximo / 0.65)],
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+            title=None,
+        ),
+        yaxis2=dict(
+            overlaying="y",
+            side="right",
+            range=[0, 1.1],
+            tickformat=".0%",
+            showgrid=False,
+            zeroline=False,
+            showticklabels=False,
+        ),
+    )
+    fig.update_xaxes(
+        type="category",
+        categoryorder="array",
+        categoryarray=categorias,
+        showgrid=False,
+        showline=True,
+        linecolor="#D3D7E6",
+        linewidth=1,
+        ticks="",
+    )
+    return fig
 
 
 def grafico_atingimento(tabela: pd.DataFrame, coluna: str) -> go.Figure | None:

@@ -56,9 +56,7 @@ def mostrar_comparacao(
                 financeiro_visao,
                 campos,
                 prefixo=f"{prefixo}_financeiro",
-                campos_busca=["Indicador", *([rotulo_dimensao] if rotulo_dimensao else []), "Status"],
                 nome_arquivo="comparacao_meta_faturamento.csv",
-                rotulo_busca="Filtrar comparação",
                 totalizador=False,
             )
 
@@ -89,8 +87,6 @@ def mostrar_comparacao(
                 dados,
                 campos,
                 prefixo=f"{prefixo}_{unidade.replace('³', '3')}",
-                campos_busca=["Indicador", *([dimensao_coluna] if dimensao_coluna else []), "Status"],
                 nome_arquivo=nome_arquivo,
-                rotulo_busca="Filtrar comparação",
                 totalizador=False,
             )

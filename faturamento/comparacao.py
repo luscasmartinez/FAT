@@ -429,9 +429,11 @@ def _valor_meta(combinado: pd.DataFrame, agrupadores: set[str]) -> float | None:
 def _status(realizado: float | None, meta: float | None, completo: bool) -> tuple[str, float | None, float | None]:
     if meta is None or pd.isna(meta) or meta == 0:
         return "Sem meta", None, None
-    if realizado is None or pd.isna(realizado) or not completo:
+    if realizado is None or pd.isna(realizado):
         return "N/A", None, None
     diferenca = realizado - meta
+    if not completo:
+        return "N/A", diferenca, None
     atingimento = realizado / meta
     if atingimento >= 1:
         status = "Atingido"
@@ -812,6 +814,7 @@ def validar_comparacao(faturamento: pd.DataFrame, fontes: FontesComparacao) -> l
         and _status(89.0, 100.0, True)[0] == "Abaixo"
         and _status(10.0, 0.0, True)[0] == "Sem meta"
         and _status(None, 100.0, True)[0] == "N/A"
+        and _status(10.0, 100.0, False) == ("N/A", -90.0, None)
     )
     checks.append(
         item(

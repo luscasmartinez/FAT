@@ -174,33 +174,17 @@ def mostrar_tabela(
     colunas: list[dict],
     *,
     prefixo: str,
-    campos_busca: list[str],
     nome_arquivo: str,
-    rotulo_busca: str = "Pesquisar",
     totalizador: bool = True,
 ) -> pd.DataFrame:
-    """Tabela com cabeçalho azul, pesquisa, ordenação e exportação CSV."""
-    c1, c2, c3 = st.columns([2.1, 1.3, 0.9])
-    with c1:
-        termo = st.text_input(rotulo_busca, key=f"{prefixo}_q", placeholder=rotulo_busca)
-    with c2:
-        escolhas = {coluna["titulo"]: coluna["campo"] for coluna in colunas}
-        padrao = next((c["titulo"] for c in colunas if c["campo"] in ("Faturamento", "Faturamento Total")), colunas[0]["titulo"])
-        titulo_ordem = st.selectbox("Ordenar por", list(escolhas), index=list(escolhas).index(padrao), key=f"{prefixo}_ord")
-    with c3:
-        sentido = st.selectbox("Ordem", ["Decrescente", "Crescente"], key=f"{prefixo}_dir")
-
+    """Tabela com ordenação padrão e exportação CSV, sem filtros locais."""
     visao = df.copy()
-    if termo and campos_busca:
-        mascara = pd.Series(False, index=visao.index)
-        for campo in campos_busca:
-            mascara = mascara | visao[campo].astype("string").str.contains(termo, case=False, na=False)
-        visao = visao.loc[mascara]
-
-    campo_ordem = escolhas[titulo_ordem]
-    crescente = sentido == "Crescente"
+    campo_ordem = next(
+        (coluna["campo"] for coluna in colunas if coluna["campo"] in ("Faturamento", "Faturamento Total")),
+        colunas[0]["campo"],
+    )
     if campo_ordem in visao.columns and not visao.empty:
-        visao = visao.sort_values(campo_ordem, ascending=crescente, kind="mergesort")
+        visao = visao.sort_values(campo_ordem, ascending=False, kind="mergesort")
 
     exportar = visao.copy()
     csv = exportar.to_csv(index=False, sep=";", decimal=",").encode("utf-8-sig")
@@ -213,7 +197,7 @@ def mostrar_tabela(
     )
 
     if visao.empty:
-        aviso("Nenhum registro para a pesquisa ou para o recorte atual.", "info")
+        aviso("Nenhum registro no recorte atual.", "info")
         return visao
 
     pico_part = 1.0

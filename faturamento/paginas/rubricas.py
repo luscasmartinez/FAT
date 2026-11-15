@@ -45,20 +45,12 @@ def pagina_rubricas(
         }
     )
 
-    termo_chave = f"{prefixo}_desc"
-    termo = st.text_input("Pesquisar descrição da rubrica", key=termo_chave, placeholder="Digite parte da descrição")
     visao = tabela
-    realizado_comparacao = df
     filtros_meta = dict(filtros_comparacao or {})
-    if termo:
-        corresponde = df["DESCRICAO_RUBRICA"].astype("string").str.contains(termo, case=False, na=False)
-        visao = tabela.loc[tabela["Descrição"].astype("string").str.contains(termo, case=False, na=False)]
-        realizado_comparacao = df.loc[corresponde]
-        filtros_meta["descricoes"] = [termo]
 
     if fontes_comparacao is not None:
         financeiro_meta, operacional_meta, _ = construir_comparacoes(
-            realizado_comparacao, fontes_comparacao, **filtros_meta
+            df, fontes_comparacao, **filtros_meta
         )
         mostrar_comparacao(
             financeiro_meta,
@@ -67,8 +59,8 @@ def pagina_rubricas(
             referencia=fontes_comparacao.referencia,
             avisos=fontes_comparacao.avisos,
             nota=(
-                "A meta existe por agrupador e COD_GRUPO, não por descrição individual; a busca de rubrica não redistribui a meta."
-                if termo or filtros_meta.get("descricoes")
+                "A meta existe por agrupador e COD_GRUPO, não por descrição individual; o filtro geral de rubrica não redistribui a meta."
+                if filtros_meta.get("descricoes")
                 else "A meta é exibida na granularidade disponível por cidade, COD_GRUPO e agrupador."
             ),
         )
@@ -89,7 +81,7 @@ def pagina_rubricas(
             {
                 "rotulo": "Faturamento das rubricas",
                 "valor": compacto(total_visao),
-                "detalhe": brl(total_visao) + (" · resultado da pesquisa" if termo else ""),
+                "detalhe": brl(total_visao),
                 "destaque": True,
                 "negativo": total_visao < 0,
             },
@@ -107,7 +99,7 @@ def pagina_rubricas(
             {
                 "rotulo": "Participação da maior",
                 "valor": percentual(maior_part) if not visao.empty else "—",
-                "detalhe": "Sobre o faturamento do recorte, antes da pesquisa",
+                "detalhe": "Sobre o faturamento do recorte dos filtros gerais",
             },
         ]
     )
@@ -122,12 +114,12 @@ def pagina_rubricas(
     with st.container(border=True):
         cartao("Ranking das rubricas", "Até 15 descrições com maior faturamento. O tooltip mostra o valor exato.")
         if ranking.empty:
-            aviso("Nenhuma rubrica encontrada para a pesquisa.", "info")
+            aviso("Nenhuma rubrica no recorte atual.", "info")
         else:
             st.plotly_chart(grafico_ranking(ranking, "Rubrica", ""), use_container_width=True, config=CONFIG)
 
     with st.container(border=True):
-        cartao("Faturamento por rubrica", "Pesquise também na tabela. A participação é sobre o total do recorte.")
+        cartao("Faturamento por rubrica", "A participação é sobre o total do recorte dos filtros gerais.")
         mostrar_tabela(
             visao,
             [
@@ -140,7 +132,5 @@ def pagina_rubricas(
                 {"campo": "Participação", "titulo": "Participação", "tipo": "pct", "barra": True},
             ],
             prefixo=f"{prefixo}_rub",
-            campos_busca=["Descrição", "Código", "Classe", "Grupo"],
             nome_arquivo="faturamento_rubricas.csv",
-            rotulo_busca="Filtrar a tabela",
         )

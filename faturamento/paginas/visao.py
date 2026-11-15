@@ -10,7 +10,12 @@ from faturamento.comparacao import FontesComparacao, construir_comparacoes
 from faturamento.componentes import aviso, cabecalho, cartao, chips, kpis, mostrar_tabela
 from faturamento.constantes import COL_PART, COL_QTD
 from faturamento.formato import brl, compacto, inteiro, percentual
-from faturamento.graficos import CONFIG, grafico_barras_classificacao, grafico_rosca
+from faturamento.graficos import (
+    CONFIG,
+    grafico_barras_classificacao,
+    grafico_grupos_faturamento,
+    grafico_rosca,
+)
 from faturamento.paginas.comparativo import mostrar_comparacao
 from faturamento.validacao import tudo_ok
 
@@ -71,11 +76,23 @@ def pagina_visao(
         financeiro, operacional, _ = construir_comparacoes(
             df, fontes_comparacao, **(filtros_comparacao or {})
         )
+        financeiro_grupos, _, _ = construir_comparacoes(
+            df,
+            fontes_comparacao,
+            **(filtros_comparacao or {}),
+            dimensao="COD_GRUPO",
+        )
         nota = (
             "Meta financeira indisponível no nível de DESCRICAO_RUBRICA; valores realizados refletem o filtro de rubrica."
             if (filtros_comparacao or {}).get("descricoes")
             else None
         )
+        with st.container(border=True):
+            st.plotly_chart(
+                grafico_grupos_faturamento(financeiro_grupos, fontes_comparacao.referencia),
+                use_container_width=True,
+                config=CONFIG,
+            )
         mostrar_comparacao(
             financeiro,
             operacional,
@@ -110,9 +127,7 @@ def pagina_visao(
                 {"campo": COL_PART, "titulo": "Participação", "tipo": "pct", "barra": True},
             ],
             prefixo=f"{prefixo}_visao",
-            campos_busca=["Classificação"],
             nome_arquivo="faturamento_classificacao.csv",
-            rotulo_busca="Pesquisar classificação",
         )
 
     with st.expander("Conferência dos cálculos", expanded=not tudo_ok(checks)):
