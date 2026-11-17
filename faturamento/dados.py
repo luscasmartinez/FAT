@@ -50,7 +50,10 @@ def tratar_planilha(origem) -> tuple[pd.DataFrame, dict]:
             f"{lista}. A importação não foi aplicada."
         )
 
-    manter = list(COLUNAS_OBRIGATORIAS)
+    colunas_opcionais = ("NUM_LIGACAO", "MOTIVO_CANCELAMENTO")
+    manter = list(COLUNAS_OBRIGATORIAS) + [
+        coluna for coluna in colunas_opcionais if coluna in bruto.columns
+    ]
     if COLUNA_TOTAL_POWER_BI in bruto.columns:
         manter.append(COLUNA_TOTAL_POWER_BI)
     dados = bruto[manter].copy()
@@ -75,6 +78,14 @@ def tratar_planilha(origem) -> tuple[pd.DataFrame, dict]:
 
     for coluna in ("COD_GRUPO", "COD_RUBRICA"):
         dados[coluna] = pd.to_numeric(dados[coluna], errors="coerce").astype("Int64")
+    if "NUM_LIGACAO" in dados.columns:
+        dados["NUM_LIGACAO"] = pd.to_numeric(
+            dados["NUM_LIGACAO"], errors="coerce"
+        ).astype("Int64")
+    if "MOTIVO_CANCELAMENTO" in dados.columns:
+        dados["MOTIVO_CANCELAMENTO"] = (
+            dados["MOTIVO_CANCELAMENTO"].astype("string").str.strip()
+        )
 
     if bool(dados["SumVALOR"].isna().any()):
         raise PlanilhaInvalida("SumVALOR ficou vazio depois da leitura.")

@@ -23,13 +23,12 @@ from faturamento.comparacao import (
 from faturamento.componentes import aviso, injetar_css
 from faturamento.constantes import CAMINHO_PADRAO
 from faturamento.dados import PlanilhaInvalida, carregar_arquivo, validar_upload_faturamento
-from faturamento.formato import brl, inteiro
 from faturamento.paginas.cidades import pagina_cidades
 from faturamento.paginas.comparativo import mostrar_comparacao
 from faturamento.paginas.grupos import pagina_grupos
 from faturamento.paginas.rubricas import pagina_rubricas
 from faturamento.paginas.visao import pagina_visao
-from faturamento.validacao import fechar_recorte, tudo_ok, validar_base
+from faturamento.validacao import fechar_recorte, validar_base
 from faturamento.persistencia import (
     BASES,
     ErroPersistencia,
@@ -156,8 +155,11 @@ def _gerenciar_historico(storage: Persistencia, tipo: str, validar) -> None:
                 st.rerun()
     else:
         st.caption("Ainda não há versões anteriores para restaurar.")
-    if st.button("Remover base atual", key=f"remover_{tipo}"):
-        _confirmar_remocao(storage, tipo)
+    if storage.current_info(tipo).get("versao_id"):
+        if st.button("Remover base atual", key=f"remover_{tipo}"):
+            _confirmar_remocao(storage, tipo)
+    else:
+        st.caption("Não há uma base ativa no armazenamento para remover.")
 
 
 def _processar_upload(storage: Persistencia, tipo: str, arquivo) -> None:
@@ -191,6 +193,129 @@ def _processar_upload(storage: Persistencia, tipo: str, arquivo) -> None:
     st.session_state.uploader_seq += 1
     st.session_state.fid += 1
     st.rerun()
+
+
+def _exibir_flash_storage() -> None:
+    flash = st.session_state.pop("storage_flash", None)
+    if not flash:
+        return
+    if flash["status"] == "erro":
+        st.error(f"Upload não aplicado: {flash.get('detalhe', 'falha de validação')}")
+    elif flash["status"] == "idêntica":
+        st.success("Reupload sem alteração; o histórico não foi duplicado.")
+    elif flash["status"] == "removida":
+        st.success("Base removida da carga atual; o histórico foi preservado.")
+    else:
+        data_hora = str(flash.get("data_hora", ""))[:19].replace("T", " ")
+        anterior = " Versão anterior mantida no histórico." if flash.get("versao_anterior") else ""
+        st.success(f"Base persistida com sucesso em {data_hora}.{anterior}")
+
+
+def _pagina_admin(
+    storage: Persistencia | None,
+    erro_storage: str | None,
+    estados: dict,
+    fallback: dict,
+    caminhos_padrao: dict,
+    nomes_bases: dict,
+) -> None:
+    st.title("Administração de dados")
+    st.caption(
+        "Envie uma planilha atualizada para substituir a base ativa. Cada envio é validado "
+        "e versionado; versões anteriores podem ser restauradas."
+    )
+    st.warning(
+        "Esta área está sem senha. Qualquer pessoa com acesso ao aplicativo pode alterar "
+        "ou remover as bases."
+    )
+    _exibir_flash_storage()
+
+    if storage is None:
+        st.error(f"Armazenamento indisponível: {erro_storage}")
+        return
+
+    validadores = {
+        "faturamento": lambda conteudo: _validar_bytes("faturamento", conteudo, "faturamento.xlsx"),
+        "meta": lambda conteudo: _validar_bytes("meta", conteudo),
+        "economias": lambda conteudo: _validar_bytes("economias", conteudo),
+    }
+
+    for tipo in BASES:
+        with st.expander(nomes_bases[tipo], expanded=True):
+            _exibir_estado_base(tipo, estados[tipo], bool(fallback.get(tipo)))
+            st.caption(
+                "Para editar os dados, envie uma nova planilha; a base atual será substituída "
+                "e preservada no histórico."
+            )
+            with st.form(f"form_upload_{tipo}_{st.session_state.uploader_seq}", clear_on_submit=True):
+                arquivo = st.file_uploader(
+                    f"Planilha atualizada de {nomes_bases[tipo]}",
+                    type=["xlsx"],
+                    key=f"upload_{tipo}_{st.session_state.uploader_seq}",
+                )
+                enviar = st.form_submit_button("Validar e substituir base")
+            if enviar and arquivo is not None:
+                _processar_upload(storage, tipo, arquivo)
+            st.markdown("**Histórico e ações**")
+            _gerenciar_historico(storage, tipo, validadores[tipo])
+
+    configuracao = storage.configuration_status()
+    if configuracao["backend"] == "local":
+        diretorio = os.getenv("STORAGE_DIR", "./storage")
+        if Path(diretorio).is_absolute():
+            diretorio = "diretório configurado"
+    else:
+        diretorio = configuracao["localizacao"]
+    st.caption(
+        f"Backend: {configuracao['backend']} — Diretório/bucket: {diretorio} — "
+        f"Versões mantidas: {configuracao['max_versoes']}"
+    )
+    if configuracao["aviso_efemero"]:
+        st.warning(
+            "Armazenamento local sem volume explicitamente configurado. Em disco efêmero, "
+            "os arquivos podem ser perdidos em reinícios; use S3 ou monte um volume persistente."
+        )
+
+    st.markdown("### Restaurar bases padrão")
+    st.caption("Substitui as bases ativas pelos arquivos padrão disponíveis no projeto.")
+    if st.button("Voltar às bases padrão 26-11", use_container_width=True):
+        erros = []
+        aplicadas = 0
+        for tipo, caminho in caminhos_padrao.items():
+            if not caminho.exists():
+                continue
+            try:
+                resultado = storage.save_upload(
+                    tipo,
+                    caminho.read_bytes(),
+                    caminho.name,
+                    aba=None,
+                    validar=validadores[tipo],
+                    autor=_autor_atual(),
+                    acao="restauração do padrão",
+                )
+                aplicadas += int(resultado["alterada"])
+            except Exception as exc:
+                erros.append(f"{nomes_bases[tipo]}: {exc}")
+        if erros:
+            st.error("Algumas bases padrão não foram aplicadas: " + "; ".join(erros))
+        elif not any(caminho.exists() for caminho in caminhos_padrao.values()):
+            st.error("Nenhum arquivo de base padrão está disponível neste ambiente.")
+        else:
+            st.session_state.storage_flash = {
+                "tipo": "todas",
+                "status": "persistida",
+                "data_hora": "agora",
+                "alterada": bool(aplicadas),
+            }
+            st.rerun()
+
+
+def _botao_area_admin() -> None:
+    st.markdown("---")
+    if st.button("Ir para a área administrativa", key="abrir_admin", use_container_width=True):
+        st.session_state.aba = "Admin"
+        st.rerun()
 
 
 def _opcoes(serie):
@@ -250,72 +375,6 @@ def main() -> None:
     except ErroPersistencia as exc:
         erro_storage = str(exc)
 
-    with st.sidebar:
-        st.markdown(
-            "<p class='eyebrow'>Análise gerencial</p><span class='marca-b'>Faturamento</span><div class='regua'></div>",
-            unsafe_allow_html=True,
-        )
-        st.caption("Substituir uma base não soma arquivos; cada envio é validado e versionado separadamente.")
-        if storage is None:
-            st.error(f"Armazenamento indisponível: {erro_storage}")
-        else:
-            validadores = {
-                "faturamento": lambda conteudo: _validar_bytes("faturamento", conteudo, "faturamento.xlsx"),
-                "meta": lambda conteudo: _validar_bytes("meta", conteudo),
-                "economias": lambda conteudo: _validar_bytes("economias", conteudo),
-            }
-            for tipo in BASES:
-                with st.form(f"form_upload_{tipo}_{st.session_state.uploader_seq}", clear_on_submit=True):
-                    arquivo = st.file_uploader(
-                        f"Substituir base: {nomes_bases[tipo]}",
-                        type=["xlsx"],
-                        key=f"upload_{tipo}_{st.session_state.uploader_seq}",
-                    )
-                    enviar = st.form_submit_button("Validar e persistir")
-                if enviar and arquivo is not None:
-                    _processar_upload(storage, tipo, arquivo)
-
-            flash = st.session_state.pop("storage_flash", None)
-            if flash:
-                if flash["status"] == "erro":
-                    st.error(f"Upload não aplicado: {flash.get('detalhe', 'falha de validação')}")
-                elif flash["status"] == "idêntica":
-                    st.success("Reupload sem alteração; o histórico não foi duplicado.")
-                elif flash["status"] == "removida":
-                    st.success("Base removida da carga atual; o histórico foi preservado.")
-                else:
-                    data_hora = str(flash.get("data_hora", ""))[:19].replace("T", " ")
-                    anterior = " Versão anterior mantida no histórico." if flash.get("versao_anterior") else ""
-                    st.success(f"Base persistida com sucesso em {data_hora}.{anterior}")
-
-            if st.button("Voltar às bases padrão 26-11", use_container_width=True):
-                erros = []
-                for tipo, caminho in caminhos_padrao.items():
-                    if not caminho.exists():
-                        continue
-                    try:
-                        storage.save_upload(
-                            tipo,
-                            caminho.read_bytes(),
-                            caminho.name,
-                            aba=None,
-                            validar=validadores[tipo],
-                            autor=_autor_atual(),
-                            acao="restauração do padrão",
-                        )
-                    except Exception as exc:
-                        erros.append(f"{nomes_bases[tipo]}: {exc}")
-                if erros:
-                    st.error("Algumas bases padrão não foram aplicadas: " + "; ".join(erros))
-                else:
-                    st.session_state.storage_flash = {
-                        "tipo": "todas",
-                        "status": "persistida",
-                        "data_hora": "agora",
-                        "alterada": True,
-                    }
-                    st.rerun()
-
     estados = {}
     conteudos = {}
     nomes_ativos = {}
@@ -347,28 +406,13 @@ def main() -> None:
                 pass
         estados[tipo] = estado
 
-    with st.sidebar:
-        for tipo in BASES:
-            _exibir_estado_base(tipo, estados[tipo], bool(fallback.get(tipo)))
-            if storage:
-                with st.expander(f"Histórico e ações: {nomes_bases[tipo]}"):
-                    _gerenciar_historico(storage, tipo, lambda conteudo, t=tipo: _validar_bytes(t, conteudo))
-
-        if storage:
-            configuracao = storage.configuration_status()
-            if configuracao["backend"] == "local":
-                diretorio = os.getenv("STORAGE_DIR", "./storage")
-                if Path(diretorio).is_absolute():
-                    diretorio = "diretório configurado"
-            else:
-                diretorio = configuracao["localizacao"]
-            st.caption(
-                f"Backend: {configuracao['backend']} — Diretório/bucket: {diretorio} — "
-                f"Versões mantidas: {configuracao['max_versoes']}"
-            )
-            if configuracao["aviso_efemero"]:
-                st.warning("Armazenamento local sem volume explicitamente configurado. Em disco efêmero, os arquivos podem ser perdidos em reinícios; use S3 ou monte um volume persistente.")
-        st.info("Sem autenticação configurada: qualquer pessoa com acesso ao app pode substituir as bases. Restrinja o acesso ou habilite autenticação antes de publicar.")
+    if st.session_state.aba == "Admin":
+        _pagina_admin(storage, erro_storage, estados, fallback, caminhos_padrao, nomes_bases)
+        st.markdown("---")
+        if st.button("Voltar ao dashboard", key="voltar_dashboard", use_container_width=True):
+            st.session_state.aba = ABAS[0]
+            st.rerun()
+        return
 
     financeiro_bytes = conteudos.get("faturamento")
     bruto = None
@@ -406,6 +450,7 @@ def main() -> None:
                 referencia=fontes_comparacao.referencia,
                 avisos=fontes_comparacao.avisos,
             )
+        _botao_area_admin()
         st.stop()
 
     assinatura_bases = "|".join(
@@ -425,21 +470,6 @@ def main() -> None:
 
     fid = st.session_state.fid
     with st.sidebar:
-        st.markdown(
-            f"**{meta_base['nome']}**<br>Planilha: {inteiro(meta_base['linhas_arquivo'])} linhas<br>"
-            f"No faturamento: {inteiro(meta_base['linhas_faturamento'])}<br>"
-            f"Total: {brl(meta_base['valor_faturamento'])}",
-            unsafe_allow_html=True,
-        )
-        if tudo_ok(checks):
-            st.success("Cálculos conferidos")
-        else:
-            st.error("Há divergência na conferência")
-        if fontes_comparacao is not None:
-            st.caption(f"Referência da meta: {fontes_comparacao.referencia:%d/%m/%Y}")
-        elif erro_comparacao:
-            st.caption(f"Comparação indisponível: {erro_comparacao}")
-
         st.markdown("### Filtros")
         st.caption("Em branco, o filtro considera todos os valores.")
         cidades = st.multiselect("Cidade", _opcoes(faturamento["CIDADE"]), key=f"cid_{fid}", placeholder="Todas")
@@ -493,6 +523,7 @@ def main() -> None:
         pagina_grupos(recorte, filtros_texto, prefixo, fontes_comparacao=fontes_comparacao, filtros_comparacao=filtros_comparacao)
     else:
         pagina_rubricas(recorte, filtros_texto, prefixo, fontes_comparacao=fontes_comparacao, filtros_comparacao=filtros_comparacao)
+    _botao_area_admin()
 
 
 if __name__ == "__main__":
